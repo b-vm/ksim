@@ -20,6 +20,7 @@ __all__ = [
     "ActuatorAccelerationObservation",
     "ContactObservation",
     "FeetContactObservation",
+    "FloorContactForceObservation",
     "FeetPositionObservation",
     "FeetOrientationObservation",
     "TimestepObservation",
@@ -46,6 +47,7 @@ from ksim.utils.mujoco import (
     get_geom_data_idx_from_name,
     get_qpos_data_idxs_by_name,
     get_sensor_data_idxs_by_name,
+    get_floor_contact_forces,
 )
 from ksim.vis import Marker
 
@@ -400,6 +402,7 @@ class ContactObservation(Observation):
 
 @attrs.define(frozen=True, kw_only=True)
 class FeetContactObservation(Observation):
+    physics_model: PhysicsModel = attrs.field()
     foot_left: tuple[int, ...] = attrs.field()
     foot_right: tuple[int, ...] = attrs.field()
     floor_geom: tuple[int, ...] = attrs.field()
@@ -426,6 +429,7 @@ class FeetContactObservation(Observation):
         foot_right_idxs = [get_geom_data_idx_from_name(physics_model, name) for name in foot_right_geom_names]
         floor_geom_idxs = [get_geom_data_idx_from_name(physics_model, name) for name in floor_geom_names]
         return cls(
+            physics_model=physics_model,
             foot_left=tuple(foot_left_idxs),
             foot_right=tuple(foot_right_idxs),
             floor_geom=tuple(floor_geom_idxs),
@@ -439,6 +443,15 @@ class FeetContactObservation(Observation):
         contact_1 = geoms_colliding(state.physics_state.data, foot_left, floor).any(axis=-1)
         contact_2 = geoms_colliding(state.physics_state.data, foot_right, floor).any(axis=-1)
         return jnp.stack([contact_1, contact_2], axis=-1)
+
+
+@attrs.define(frozen=True, kw_only=True)
+class FloorContactForceObservation(FeetContactObservation):
+    def observe(self, state: ObservationInput, curriculum_level: Array, rng: PRNGKeyArray) -> Array:
+        floor_id = self.floor_geom[0]
+        force_left = get_floor_contact_forces(self.physics_model, state.physics_state.data, floor_id=floor_id, body_geoms=self.foot_left)
+        force_right = get_floor_contact_forces(self.physics_model, state.physics_state.data, floor_id=floor_id, body_geoms=self.foot_right)
+        return jnp.stack([force_left, force_right], axis=-1)
 
 
 @attrs.define(frozen=True, kw_only=True)

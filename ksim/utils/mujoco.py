@@ -217,6 +217,18 @@ def geoms_colliding(state: PhysicsData, geom1: Array, geom2: Array) -> Array:
     return get_colliding_inner(state.contact.geom, state.contact.dist, geom1, geom2)
 
 
+def get_floor_contact_forces(model: PhysicsModel, state: PhysicsData, floor_id: int, body_geoms: Array) -> Array:
+    """Return the sum of all contact forces between floor and body geoms."""
+    total_body_contact_force = np.zeros((6, 1), dtype=np.float64)
+    for contact in state.contact:
+        if contact.geom1 == floor_id and contact.geom2 in body_geoms:
+            force = np.zeros((6, 1), dtype=np.float64)
+            mujoco.mj_contactForce(model, state, floor_id, force)
+            total_body_contact_force += force
+
+    return total_body_contact_force[:3]
+
+
 def get_joint_names_in_order(model: PhysicsModel) -> list[str]:
     """Get the joint names in order of their indices."""
     return [bytes(model.names[model.name_jntadr[i] :]).decode("utf-8").split("\x00")[0] for i in range(model.njnt)]
