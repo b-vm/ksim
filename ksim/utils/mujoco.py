@@ -219,14 +219,28 @@ def geoms_colliding(state: PhysicsData, geom1: Array, geom2: Array) -> Array:
 
 def get_floor_contact_forces(model: PhysicsModel, state: PhysicsData, floor_id: int, body_geoms: Array) -> Array:
     """Return the sum of all contact forces between floor and body geoms."""
-    total_body_contact_force = np.zeros((6, 1), dtype=np.float64)
-    for contact in state.contact:
-        if contact.geom1 == floor_id and contact.geom2 in body_geoms:
-            force = np.zeros((6, 1), dtype=np.float64)
-            mujoco.mj_contactForce(model, state, floor_id, force)
-            total_body_contact_force += force
-
-    return total_body_contact_force[:3]
+    contact_mask = (
+        ((state.contact.geom1 == floor_id) & jnp.isin(state.contact.geom2, body_geoms)) |
+        ((state.contact.geom2 == floor_id) & jnp.isin(state.contact.geom1, body_geoms))
+    )
+    
+    total_force = jnp.zeros((3,))
+    if state.contact.geom1.shape[0] == 0:
+        return total_force
+    
+    def sum_contact_forces(total_force: Array, i: int) -> tuple[Array, None]:
+        force = mjx._src.support.contact_force(model, state, i)[:3]
+        force = jnp.where(contact_mask[i], force, jnp.zeros_like(force))
+        return total_force + force, None
+    
+    # Use scan to sum up forces for all contacts
+    total_force, _ = jax.lax.scan(
+        sum_contact_forces,
+        total_force,
+        jnp.arange(state.contact.geom1.shape[0])
+    )
+    
+    return total_force
 
 
 def get_joint_names_in_order(model: PhysicsModel) -> list[str]:
