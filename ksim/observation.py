@@ -447,11 +447,13 @@ class FeetContactObservation(Observation):
 
 @attrs.define(frozen=True, kw_only=True)
 class FloorContactForceObservation(FeetContactObservation):
+    """Returns contact forces between floor and feet in [F_xl, F_yl, F_zl, F_xr, F_yr, F_zr]"""
+
     def observe(self, state: ObservationInput, curriculum_level: Array, rng: PRNGKeyArray) -> Array:
         floor_id = self.floor_geom[0]
-        force_left = get_floor_contact_forces(self.physics_model, state.physics_state.data, floor_id=floor_id, body_geoms=self.foot_left)
-        force_right = get_floor_contact_forces(self.physics_model, state.physics_state.data, floor_id=floor_id, body_geoms=self.foot_right)
-        return jnp.stack([force_left, force_right], axis=-1)
+        force_left = get_floor_contact_forces(self.physics_model, state.physics_state.data, floor_id=floor_id, body_geoms=self.foot_left).squeeze()
+        force_right = get_floor_contact_forces(self.physics_model, state.physics_state.data, floor_id=floor_id, body_geoms=self.foot_right).squeeze()
+        return jnp.concatenate([force_left, force_right])
 
 
 @attrs.define(frozen=True, kw_only=True)
