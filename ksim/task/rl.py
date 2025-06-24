@@ -2179,6 +2179,7 @@ class RLTask(xax.Task[Config], Generic[Config], ABC):
 
             is_first_step = True
             last_full_render_time = 0.0
+            reward_highscore = float("-inf")
 
             try:
                 while self._is_running and not self.is_training_over(state):
@@ -2210,8 +2211,11 @@ class RLTask(xax.Task[Config], Generic[Config], ABC):
                         self.log_train_metrics(metrics)
                         self.log_state_timers(state)
 
-                        if self.should_checkpoint(state):
+                        if self.should_checkpoint(state) and metrics.reward['total'] >= reward_highscore:
                             self._save(constants=constants, carry=carry, state=state)
+
+                        if metrics.reward['total'] >= reward_highscore:
+                            reward_highscore = metrics.reward['total']
 
                         state = self.on_step_end(state)
 
