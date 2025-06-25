@@ -2180,11 +2180,13 @@ class RLTask(xax.Task[Config], Generic[Config], ABC):
             is_first_step = True
             last_full_render_time = 0.0
             reward_highscore = float("-inf")
+            is_highscore = False
 
             try:
                 while self._is_running and not self.is_training_over(state):
                     # Runs the training loop.
                     with xax.ContextTimer() as timer:
+                        is_highscore = False
                         valid_step = self.valid_step_timer(state)
 
                         state = state.replace(
@@ -2211,11 +2213,12 @@ class RLTask(xax.Task[Config], Generic[Config], ABC):
                         self.log_train_metrics(metrics)
                         self.log_state_timers(state)
 
-                        if self.should_checkpoint(state) and metrics.reward['total'] >= reward_highscore:
-                            self._save(constants=constants, carry=carry, state=state)
-
                         if metrics.reward['total'] >= reward_highscore:
+                            is_highscore = True
                             reward_highscore = metrics.reward['total']
+
+                        if self.should_checkpoint(state) and is_highscore:
+                            self._save(constants=constants, carry=carry, state=state)
 
                         state = self.on_step_end(state)
 
@@ -2265,19 +2268,22 @@ class RLTask(xax.Task[Config], Generic[Config], ABC):
                         )
 
                 # Save the checkpoint when done.
-                self._save(constants=constants, carry=carry, state=state)
+                if is_highscore:
+                    self._save(constants=constants, carry=carry, state=state)
 
             except xax.TrainingFinishedError:
                 if xax.is_master():
                     msg = f"Finished training after {state.num_steps}steps and {state.num_samples} samples"
                     xax.show_info(msg, important=True)
-                self._save(constants=constants, carry=carry, state=state)
+                if is_highscore:
+                    self._save(constants=constants, carry=carry, state=state)
 
             except BaseException:
                 exception_tb = textwrap.indent(xax.highlight_exception_message(traceback.format_exc()), "  ")
                 sys.stdout.write(f"Caught exception during training loop:\n\n{exception_tb}\n")
                 sys.stdout.flush()
-                self._save(constants=constants, carry=carry, state=state)
+                if is_highscore:
+                    self._save(constants=constants, carry=carry, state=state)
 
             finally:
                 state = self.on_training_end(state)
