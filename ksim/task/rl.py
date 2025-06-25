@@ -2213,9 +2213,9 @@ class RLTask(xax.Task[Config], Generic[Config], ABC):
                         self.log_train_metrics(metrics)
                         self.log_state_timers(state)
 
-                        if metrics.reward['total'] >= reward_highscore:
+                        if float(metrics.reward['total'].mean) >= reward_highscore:
                             is_highscore = True
-                            reward_highscore = metrics.reward['total']
+                            reward_highscore = float(metrics.reward['total'].mean)
 
                         if self.should_checkpoint(state) and is_highscore:
                             self._save(constants=constants, carry=carry, state=state)
