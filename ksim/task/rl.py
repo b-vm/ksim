@@ -2215,9 +2215,9 @@ class RLTask(xax.Task[Config], Generic[Config], ABC):
 
                         if float(metrics.reward['total'].mean) >= reward_highscore:
                             is_highscore = True
-                            reward_highscore = float(metrics.reward['total'].mean)
 
                         if self.should_checkpoint(state) and is_highscore:
+                            reward_highscore = float(metrics.reward['total'].mean)
                             self._save(constants=constants, carry=carry, state=state)
 
                         state = self.on_step_end(state)
