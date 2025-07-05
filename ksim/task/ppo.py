@@ -89,7 +89,7 @@ def compute_ppo_inputs(
         rollout_truncation_mask = jnp.zeros_like(dones_t).at[-1].set(1.0) & ~dones_t
         success_termination_mask = successes_t
         bootstrap_mask = jnp.where(success_termination_mask | rollout_truncation_mask, 1.0, 0.0)
-        bootstrapped_rewards_t = rewards_t + decay_gamma * values_shifted_t * bootstrap_mask
+        bootstrapped_rewards_t = rewards_t / rollout_length_steps + decay_gamma * values_shifted_t * bootstrap_mask
 
         mask_t = jnp.where(dones_t, 0.0, 1.0)
 
