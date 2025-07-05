@@ -85,9 +85,11 @@ def compute_ppo_inputs(
         # Uses the last value of the trajectory as the bootstrap value.
         values_shifted_t = jnp.concatenate([values_t[1:], jnp.expand_dims(values_t[-1], 0)], axis=0)
 
-        # 1-step bootstrap on successful terminations.
-        trunc_mask_t = jnp.where(successes_t, 1.0, 0.0)
-        bootstrapped_rewards_t = rewards_t / rollout_length_steps + decay_gamma * values_t * trunc_mask_t
+        # Bootstrap truncated trajectories: successful terminations AND rollout buffer truncations
+        rollout_truncation_mask = jnp.zeros_like(dones_t).at[-1].set(1.0) & ~dones_t
+        success_termination_mask = successes_t
+        bootstrap_mask = jnp.where(success_termination_mask | rollout_truncation_mask, 1.0, 0.0)
+        bootstrapped_rewards_t = rewards_t + decay_gamma * values_shifted_t * bootstrap_mask
 
         mask_t = jnp.where(dones_t, 0.0, 1.0)
 
