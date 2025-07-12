@@ -212,7 +212,7 @@ class JoystickCommandMarker(Marker):
         self.pos = (0.0, 0.0, self.height)
 
         if cmd_idx == 0:
-            self.geom = mujoco.mjtGeom.mjGEOM_SPHERE
+            self.geom = mujoco.mjtGeom.mjGEOM_SPHERE  # pyright: ignore[reportAttributeAccessIssue]
             self.scale = (self.radius, self.radius, self.radius)
             self.rgba = (1.0, 1.0, 1.0, 0.8)
 
@@ -224,13 +224,13 @@ class JoystickCommandMarker(Marker):
                 6: (0.0, -1.0, 0.0),  # strafe right
             }
             direction = dir_map[cmd_idx]
-            self.geom = mujoco.mjtGeom.mjGEOM_ARROW
+            self.geom = mujoco.mjtGeom.mjGEOM_ARROW  # pyright: ignore[reportAttributeAccessIssue]
             self.scale = (self.size, self.size, self.arrow_len)
             self.orientation = self.quat_from_direction(direction)
             self.rgba = (0.2, 0.8, 0.2, 0.8)
 
         else:
-            self.geom = mujoco.mjtGeom.mjGEOM_ARROW
+            self.geom = mujoco.mjtGeom.mjGEOM_ARROW  # pyright: ignore[reportAttributeAccessIssue]
             self.scale = (self.size, self.size, self.arrow_len)
 
             # Up for left-turn, down for right-turn (like right-hand rule).
@@ -254,7 +254,7 @@ class JoystickCommandMarker(Marker):
         return cls(
             command_name=command_name,
             target_type="root",
-            geom=mujoco.mjtGeom.mjGEOM_SPHERE,
+            geom=mujoco.mjtGeom.mjGEOM_SPHERE,  # pyright: ignore[reportAttributeAccessIssue]
             scale=(radius, radius, radius),
             size=size,
             arrow_len=arrow_len,
@@ -349,7 +349,7 @@ class PositionCommandMarker(Marker):
         return cls(
             command_name=command_name,
             target_name=base_name,
-            geom=mujoco.mjtGeom.mjGEOM_SPHERE,
+            geom=mujoco.mjtGeom.mjGEOM_SPHERE,  # pyright: ignore[reportAttributeAccessIssue]
             scale=(radius, radius, radius),
             rgba=rgba,
         )
@@ -376,7 +376,12 @@ class PositionCommand(Command):
     unique_name: str | None = attrs.field(default=None)
     curriculum_scale: float = attrs.field(default=0.1)
 
-    def _sample_box(self, rng: PRNGKeyArray, physics_data: PhysicsData, curriculum_level: Array) -> Array:
+    def _sample_box(
+        self,
+        rng: PRNGKeyArray,
+        physics_data: PhysicsData,
+        curriculum_level: Array,
+    ) -> Array:
         min_coords = jnp.array(self.box_min)
         max_coords = jnp.array(self.box_max)
 
@@ -408,7 +413,12 @@ class PositionCommand(Command):
         # Sample initial target and speed
         rng_target, rng_speed = jax.random.split(rng)
         target = self._sample_box(rng_target, physics_data, curriculum_level)
-        speed = jax.random.uniform(rng_speed, (), minval=self.min_speed, maxval=self.max_speed)
+        speed = jax.random.uniform(
+            rng_speed,
+            (),
+            minval=self.min_speed,
+            maxval=self.max_speed,
+        )
 
         # Return [current_x, current_y, current_z, target_x, target_y, target_z, speed]
         return jnp.concatenate([target, target, jnp.array([speed])])
@@ -434,14 +444,23 @@ class PositionCommand(Command):
 
         # Sample new target and speed if reached
         new_target = self._sample_box(rng_a, physics_data, curriculum_level)
-        new_speed = jax.random.uniform(rng_b, (), minval=self.min_speed, maxval=self.max_speed)
+        new_speed = jax.random.uniform(
+            rng_b,
+            (),
+            minval=self.min_speed,
+            maxval=self.max_speed,
+        )
 
         switch_mask = jax.random.bernoulli(rng_c, self.switch_prob)
 
         jump_mask = jax.random.bernoulli(rng_c, self.jump_prob)
 
         # Update target and speed if reached
-        target = jnp.where((reached_target & switch_mask) | jump_mask, new_target, target)
+        target = jnp.where(
+            (reached_target & switch_mask) | jump_mask,
+            new_target,
+            target,
+        )
         speed = jnp.where((reached_target & switch_mask) | jump_mask, new_speed, speed)
 
         # Calculate step size based on speed and timestep
@@ -460,7 +479,14 @@ class PositionCommand(Command):
         return jnp.concatenate([new_current, target, jnp.array([speed])])
 
     def get_markers(self) -> Collection[Marker]:
-        return [PositionCommandMarker.get(self.command_name, self.base_name, self.vis_radius, self.vis_color)]
+        return [
+            PositionCommandMarker.get(
+                self.command_name,
+                self.base_name,
+                self.vis_radius,
+                self.vis_color,
+            )
+        ]
 
     def get_name(self) -> str:
         name = super().get_name()

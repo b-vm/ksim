@@ -31,6 +31,7 @@ __all__ = [
     "LinkJerkPenalty",
     "JoystickReward",
     "ReachabilityPenalty",
+    "LongContactReward",
 ]
 
 import functools
@@ -634,7 +635,8 @@ class LinkAccelerationPenalty(Reward):
         pos = trajectory.xpos[..., 1:, :]
         pos_zp = jnp.pad(pos, ((2, 0), (0, 0), (0, 0)), mode="edge")
         done = jnp.pad(trajectory.done, ((2, 0),), mode="edge")[..., :-1, None]
-        vel = jnp.where(done, 0.0, jnp.linalg.norm(pos_zp[..., 1:, :, :] - pos_zp[..., :-1, :, :], axis=-1))
+        vel: Array = jnp.linalg.norm(pos_zp[..., 1:, :, :] - pos_zp[..., :-1, :, :], axis=-1)
+        vel = jnp.where(done, 0.0, vel)
         acc = jnp.where(done[..., 1:, :], 0.0, vel[..., 1:, :] - vel[..., :-1, :])
         penalty = xax.get_norm(acc, self.norm).mean(axis=-1)
         return penalty
@@ -650,7 +652,8 @@ class LinkJerkPenalty(Reward):
         pos = trajectory.xpos[..., 1:, :]
         pos_zp = jnp.pad(pos, ((3, 0), (0, 0), (0, 0)), mode="edge")
         done = jnp.pad(trajectory.done, ((3, 0),), mode="edge")[..., :-1, None]
-        vel = jnp.where(done, 0.0, jnp.linalg.norm(pos_zp[..., 1:, :, :] - pos_zp[..., :-1, :, :], axis=-1))
+        vel: Array = jnp.linalg.norm(pos_zp[..., 1:, :, :] - pos_zp[..., :-1, :, :], axis=-1)
+        vel = jnp.where(done, 0.0, vel)
         acc = jnp.where(done[..., 1:, :], 0.0, vel[..., 1:, :] - vel[..., :-1, :])
         jerk = jnp.where(done[..., 2:, :], 0.0, acc[..., 1:, :] - acc[..., :-1, :])
         penalty = xax.get_norm(jerk, self.norm).mean(axis=-1)
@@ -779,3 +782,19 @@ class ReachabilityPenalty(Reward):
         penalty_t = per_joint.sum(axis=-1)
 
         return penalty_t
+
+
+@attrs.define(frozen=True, kw_only=True)
+class LongContactReward(Reward):
+    """Reward for feet either touching or not touching the ground for some time."""
+
+    dt: float = attrs.field()
+    threshold: float = attrs.field()
+    touch_sensors: tuple[str, ...] = attrs.field()
+
+    def get_reward(self, trajectory: Trajectory) -> Array:
+        sensor_data = jnp.stack([trajectory.obs[sensor].squeeze(-1) > 0.1 for sensor in self.touch_sensors], axis=-1)
+        threshold_steps = round(self.threshold / self.dt)
+        contact_steps = jnp.cumsum(sensor_data, axis=0).clip(max=threshold_steps)
+        no_contact_steps = jnp.cumsum(~sensor_data, axis=0).clip(max=threshold_steps)
+        return jnp.stack([contact_steps, no_contact_steps], axis=-1).max(axis=-1).sum(axis=-1) * self.dt

@@ -49,10 +49,10 @@ class Actor(eqx.Module):
     """Actor for the walking task."""
 
     mlp: eqx.nn.MLP
-    min_std: float = eqx.static_field()
-    max_std: float = eqx.static_field()
-    var_scale: float = eqx.static_field()
-    num_mixtures: int = eqx.static_field()
+    min_std: float = eqx.field(static=True)
+    max_std: float = eqx.field(static=True)
+    var_scale: float = eqx.field(static=True)
+    num_mixtures: int = eqx.field(static=True)
 
     def __init__(
         self,
@@ -265,13 +265,8 @@ class HumanoidWalkingTask(ksim.PPOTask[Config], Generic[Config]):
 
     def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
         return [
-            ksim.PushEvent(
-                x_linvel=1.0,
-                y_linvel=1.0,
-                z_linvel=0.0,
-                x_angvel=0.1,
-                y_angvel=0.1,
-                z_angvel=0.3,
+            ksim.LinearPushEvent(
+                linvel=1.0,
                 interval_range=(2.0, 5.0),
             ),
             ksim.JumpEvent(
@@ -325,6 +320,8 @@ class HumanoidWalkingTask(ksim.PPOTask[Config], Generic[Config]):
             ksim.SensorObservation.create(physics_model=physics_model, sensor_name="right_foot_upvector"),
             ksim.SensorObservation.create(physics_model=physics_model, sensor_name="left_foot_pos"),
             ksim.SensorObservation.create(physics_model=physics_model, sensor_name="right_foot_pos"),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="left_foot_touch"),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="right_foot_touch"),
             ksim.FeetContactObservation.create(
                 physics_model=physics_model,
                 foot_left_geom_names=["foot_left"],
@@ -360,6 +357,15 @@ class HumanoidWalkingTask(ksim.PPOTask[Config], Generic[Config]):
                 scale=1.0,
             ),
             ksim.CtrlPenalty.create(physics_model),
+            ksim.LongContactReward(
+                dt=self.config.dt,
+                threshold=0.6,
+                touch_sensors=(
+                    "sensor_observation_left_foot_touch",
+                    "sensor_observation_right_foot_touch",
+                ),
+                scale=1.0,
+            ),
         ]
 
     def get_terminations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Termination]:

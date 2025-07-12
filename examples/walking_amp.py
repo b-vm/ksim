@@ -45,12 +45,12 @@ class DefaultHumanoidRNNActor(eqx.Module):
     input_proj: eqx.nn.Linear
     rnns: tuple[eqx.nn.GRUCell, ...]
     output_proj: eqx.nn.Linear
-    num_inputs: int = eqx.static_field()
-    num_outputs: int = eqx.static_field()
-    num_mixtures: int = eqx.static_field()
-    min_std: float = eqx.static_field()
-    max_std: float = eqx.static_field()
-    var_scale: float = eqx.static_field()
+    num_inputs: int = eqx.field(static=True)
+    num_outputs: int = eqx.field(static=True)
+    num_mixtures: int = eqx.field(static=True)
+    min_std: float = eqx.field(static=True)
+    max_std: float = eqx.field(static=True)
+    var_scale: float = eqx.field(static=True)
 
     def __init__(
         self,
@@ -427,13 +427,8 @@ class HumanoidWalkingAMPTask(ksim.AMPTask[Config], Generic[Config]):
 
     def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
         return [
-            ksim.PushEvent(
-                x_linvel=1.0,
-                y_linvel=1.0,
-                z_linvel=0.0,
-                x_angvel=0.1,
-                y_angvel=0.1,
-                z_angvel=0.3,
+            ksim.LinearPushEvent(
+                linvel=1.0,
                 interval_range=(0.25, 0.75),
             ),
         ]
