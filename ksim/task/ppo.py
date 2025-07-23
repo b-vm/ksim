@@ -39,6 +39,7 @@ class PPOVariables:
     values: Array
     entropy: Array | None = None
     aux_losses: Mapping[str, Array] | None = None
+    action_std: Array | None = None
 
 
 @xax.jit(
@@ -369,6 +370,8 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
             metrics[f"loss_{name}"] = loss.mean()
         if off_policy_variables.entropy is not None:
             metrics["entropy"] = off_policy_variables.entropy.mean(0).flatten()
+        if off_policy_variables.action_std is not None:
+            metrics["action_std"] = off_policy_variables.action_std.mean()
         if off_policy_variables.aux_losses is not None:
             for (
                 aux_loss_name,
