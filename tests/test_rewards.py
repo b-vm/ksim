@@ -35,6 +35,7 @@ def create_test_trajectory(
     dummy_xquat = jnp.zeros((timesteps, 5, 4))
     dummy_ctrl = jnp.zeros((timesteps, action_dims))
     dummy_timestep = jnp.arange(timesteps, dtype=jnp.float32)
+    dummy_curriculum_level = jnp.zeros(timesteps)
     dummy_success = jnp.zeros(timesteps, dtype=bool)
 
     return ksim.Trajectory(
@@ -43,15 +44,16 @@ def create_test_trajectory(
         xpos=dummy_xpos,
         xquat=dummy_xquat,
         ctrl=dummy_ctrl,
-        obs=xax.FrozenDict({}),
-        command=xax.FrozenDict({}),
-        event_state=xax.FrozenDict({}),
+        obs=xax.freeze_dict({}),
+        command=xax.freeze_dict({}),
+        event_state=xax.freeze_dict({}),
         action=actions,
         done=done,
         success=dummy_success,
         timestep=dummy_timestep,
-        termination_components=xax.FrozenDict({}),
-        aux_outputs=xax.FrozenDict({}),
+        curriculum_level=dummy_curriculum_level,
+        termination_components=xax.freeze_dict({}),
+        aux_outputs=xax.freeze_dict({}),
     )
 
 
