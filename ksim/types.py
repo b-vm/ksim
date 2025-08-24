@@ -54,6 +54,11 @@ class Trajectory:
     Note that `qpos`, `qvel`, `xpos`, `xquat`, `timestep`, `done` and `success`
     are the values from *after* the action has been taken, while `obs` and
     `command` are the values from *before* the action has been taken.
+
+    The carries field stores the model carry state for each timestep. For RNN models,
+    this typically contains hidden states (h, c) for each layer, along with any other
+    stateful components like filter parameters. The carry at index t was used to generate
+    the action at timestep t.
     """
 
     qpos: Array
@@ -71,6 +76,7 @@ class Trajectory:
     curriculum_level: Array
     termination_components: xax.FrozenDict[str, Array]
     aux_outputs: xax.FrozenDict[str, PyTree]
+    carries: PyTree  # Shape matches timesteps, stores carry state used at each step
 
     def episode_length(self) -> Array:
         done_mask = self.done.at[..., -1].set(True)

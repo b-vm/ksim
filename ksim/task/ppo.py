@@ -570,9 +570,12 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
         policy_model = eqx.combine(policy_model_arr, policy_model_static)
 
         # Runs the policy model on the trajectory to get the PPO variables.
+        # Use the carries that were stored when collecting the trajectory
+        # The carries have shape (batch, timesteps, ...) - we want the carries from timestep 0
+        initial_carries = jax.tree.map(lambda x: x[..., 0, :], trajectories.carries)
         on_policy_rngs = jax.random.split(onp_rng, trajectories.done.shape[0])
         ppo_fn = xax.vmap(self.get_ppo_variables, in_axes=(None, 0, 0, 0), jit_level=JitLevel.RL_CORE)
-        on_policy_variables, _ = ppo_fn(policy_model, trajectories, carry.env_states.model_carry, on_policy_rngs)
+        on_policy_variables, _ = ppo_fn(policy_model, trajectories, initial_carries, on_policy_rngs)
         on_policy_variables = jax.tree.map(lambda x: jax.lax.stop_gradient(x), on_policy_variables)
 
         # Loops over the trajectory batches and applies gradient updates.

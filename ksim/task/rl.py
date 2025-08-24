@@ -1065,6 +1065,7 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
             curriculum_level=env_states.curriculum_state.level,
             termination_components=terminations,
             aux_outputs=action.aux_outputs,
+            carries=env_states.model_carry,  # Store the carry used to generate this step's action
         )
 
         next_physics_state = jax.lax.cond(
