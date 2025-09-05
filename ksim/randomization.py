@@ -11,6 +11,8 @@ __all__ = [
     "JointDampingRandomizer",
     "JointZeroPositionRandomizer",
     "IMUAlignmentRandomizer",
+    "COMRandomizer",
+    "AllBodiesCOMRandomizer",
 ]
 
 import functools
@@ -296,3 +298,71 @@ class IMUAlignmentRandomizer(PhysicsRandomizer):
             updates["site_pos"] = model.site_pos.at[site_id].add(dpos)
 
         return updates
+
+
+@attrs.define(frozen=True, kw_only=True)
+class COMRandomizer(PhysicsRandomizer):
+    """Randomizes the center of mass position (ipos) for a specific body in the bot."""
+
+    body_id: int = attrs.field()
+    scale_lower: float = attrs.field(default=-0.01)  # 1cm in either direction by default
+    scale_upper: float = attrs.field(default=0.01)
+
+    def __call__(self, model: PhysicsModel, rng: PRNGKeyArray) -> dict[str, Array]:
+        # Sample random offsets for x, y, z coordinates
+        rng, sub = jax.random.split(rng)
+        ipos_offset = jax.random.uniform(
+            sub,
+            shape=(3,),
+            minval=self.scale_lower,
+            maxval=self.scale_upper,
+        )
+
+        # Create new ipos array with the offset added to the specified body
+        new_ipos = jnp.concatenate(
+            [
+                model.body_ipos[: self.body_id],
+                jnp.array([model.body_ipos[self.body_id] + ipos_offset]),
+                model.body_ipos[self.body_id + 1 :],
+            ]
+        )
+        return {"body_ipos": new_ipos}
+
+    @classmethod
+    def from_body_name(
+        cls,
+        model: PhysicsModel,
+        body_name: str,
+        scale_lower: float = -0.01,
+        scale_upper: float = 0.01,
+    ) -> Self:
+        names_to_idxs = get_body_data_idx_by_name(model)
+        if body_name not in names_to_idxs:
+            raise ValueError(f"Body name {body_name} not found in model")
+        body_id = names_to_idxs[body_name]
+        return cls(
+            body_id=body_id,
+            scale_lower=scale_lower,
+            scale_upper=scale_upper,
+        )
+
+
+@attrs.define(frozen=True, kw_only=True)
+class AllBodiesCOMRandomizer(PhysicsRandomizer):
+    """Randomizes the center of mass positions (ipos) for all bodies in the bot."""
+
+    scale_lower: float = attrs.field(default=-0.01)  # 1cm in either direction by default
+    scale_upper: float = attrs.field(default=0.01)
+
+    def __call__(self, model: PhysicsModel, rng: PRNGKeyArray) -> dict[str, Array]:
+        # Sample random offsets for x, y, z coordinates for all bodies
+        rng, sub = jax.random.split(rng)
+        ipos_offsets = jax.random.uniform(
+            sub,
+            shape=(model.nbody, 3),
+            minval=self.scale_lower,
+            maxval=self.scale_upper,
+        )
+
+        new_ipos = model.body_ipos + ipos_offsets
+        return {"body_ipos": new_ipos}
