@@ -160,11 +160,19 @@ class LinearPushEvent(Event):
         # Scales the curriculum level range.
         curriculum_level = self.scale.get_scale(curriculum_level)
 
-        push_theta = jax.random.uniform(urng, (), minval=0.0, maxval=2.0 * jnp.pi)
-        push_theta = jnp.array([jnp.cos(push_theta), jnp.sin(push_theta), 0.0])
+        # Sample spherical coordinates for 3D direction
+        theta = jax.random.uniform(urng, (), minval=0.0, maxval=2.0 * jnp.pi)  # azimuthal angle
+        phi = jax.random.uniform(urng, (), minval=0.0, maxval=jnp.pi)  # polar angle
+        
+        # Convert spherical to cartesian coordinates (unit vector)
+        push_dir = jnp.array([
+            jnp.sin(phi) * jnp.cos(theta),
+            jnp.sin(phi) * jnp.sin(theta),
+            jnp.cos(phi)
+        ])
 
         push_mag = jax.random.uniform(brng, (), minval=self.vel_range[0], maxval=self.vel_range[1]) * self.linvel
-        push_vel = push_theta * push_mag * curriculum_level
+        push_vel = push_dir * push_mag * curriculum_level
         new_qvel = slice_update(data, "qvel", slice(0, 3), data.qvel[..., :3] + push_vel)
         updated_data = update_data_field(data, "qvel", new_qvel)
 
