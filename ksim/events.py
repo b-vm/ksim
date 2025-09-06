@@ -5,6 +5,7 @@ __all__ = [
     "LinearPushEvent",
     "AngularPushEvent",
     "JumpEvent",
+    "ForcePushEvent",
 ]
 
 from abc import ABC, abstractmethod
@@ -244,3 +245,69 @@ class JumpEvent(Event):
     def get_initial_event_state(self, rng: PRNGKeyArray) -> Array:
         minval, maxval = self.interval_range
         return jax.random.uniform(rng, (), minval=minval, maxval=maxval)
+
+
+@attrs.define(frozen=True, kw_only=True)
+class ForcePushEvent(Event):
+    """Apply a continuous force to the robot over time.
+
+    Unlike LinearPushEvent which sets velocity.
+    """
+
+    max_force: float = attrs.field()
+    force_range: tuple[float, float] = attrs.field(default=(0.0, 1.0))
+    duration_range: tuple[float, float] = attrs.field()
+    interval_range: tuple[float, float] = attrs.field()
+    scale: Scale = attrs.field(default=ConstantScale(scale=1.0), converter=convert_to_scale)
+
+    def __call__(
+        self,
+        model: PhysicsModel,
+        data: PhysicsData,
+        event_state: PyTree,
+        curriculum_level: Array,
+        rng: PRNGKeyArray,
+    ) -> tuple[PhysicsData, Array]:
+        time_remaining, force_duration, force = event_state
+
+        # Decrement timers by physics timestep
+        dt = jnp.float32(model.opt.timestep)
+        time_remaining = time_remaining - dt
+        force_duration = max(0.0, force_duration - dt)
+
+        # Apply force or zero it out based on duration
+        scaled_force = force * curriculum_level
+        new_qfrc = jax.lax.cond(
+            force_duration > 0.0, lambda _: scaled_force, lambda _: jnp.zeros_like(scaled_force), None
+        )
+        data = update_data_field(data, "qfrc_applied", slice_update(data, "qfrc_applied", slice(0, 3), new_qfrc))
+
+        # If interval expired, sample next force
+        data, time_remaining, force_duration, force = jax.lax.cond(
+            time_remaining <= 0.0, self._sample_force, lambda x: x, (data, time_remaining, force_duration, force)
+        )
+
+        event_state = (time_remaining, force_duration, force)
+        return data, event_state
+
+    def _sample_force(self, rng: PRNGKeyArray) -> tuple[Array, Array, Array]:
+        rng_splits = jax.random.split(rng, 4)
+
+        # Sample random 3D force
+        direction = jax.random.uniform(rng_splits[0], shape=(3,), minval=-1.0, maxval=1.0)
+        force_scale = jax.random.uniform(rng_splits[1], (), minval=self.force_range[0], maxval=self.force_range[1])
+        force = direction / jnp.linalg.norm(direction) * force_scale * self.max_force
+
+        # Initial timers
+        time_remaining = jax.random.uniform(
+            rng_splits[2], (), minval=self.interval_range[0], maxval=self.interval_range[1]
+        )
+        force_duration = jax.random.uniform(
+            rng_splits[3], (), minval=self.duration_range[0], maxval=self.duration_range[1]
+        )
+
+        return (time_remaining, force_duration, force)
+
+    def get_initial_event_state(self, rng: PRNGKeyArray) -> PyTree:
+        minval, maxval = self.interval_range
+        return jax.random.uniform(rng, (), minval=minval, maxval=maxval), 0, jnp.zeros(3)
