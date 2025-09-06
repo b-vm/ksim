@@ -103,7 +103,9 @@ class AngularPushEvent(Event):
         curriculum_level = self.scale.get_scale(curriculum_level)
 
         flip = jax.random.bernoulli(frng, p=0.5, shape=(3,))
-        push_mag = jax.random.uniform(brng, shape=(3,), minval=self.vel_range[0], maxval=self.vel_range[1]) * self.angvel
+        push_mag = (
+            jax.random.uniform(brng, shape=(3,), minval=self.vel_range[0], maxval=self.vel_range[1]) * self.angvel
+        )
         push_mag = jnp.where(flip, -push_mag, push_mag)
         push_vel = push_mag * curriculum_level
         new_qvel = slice_update(data, "qvel", slice(3, 6), data.qvel[..., 3:6] + push_vel)
@@ -163,13 +165,9 @@ class LinearPushEvent(Event):
         # Sample spherical coordinates for 3D direction
         theta = jax.random.uniform(urng, (), minval=0.0, maxval=2.0 * jnp.pi)  # azimuthal angle
         phi = jax.random.uniform(urng, (), minval=0.0, maxval=jnp.pi)  # polar angle
-        
+
         # Convert spherical to cartesian coordinates (unit vector)
-        push_dir = jnp.array([
-            jnp.sin(phi) * jnp.cos(theta),
-            jnp.sin(phi) * jnp.sin(theta),
-            jnp.cos(phi)
-        ])
+        push_dir = jnp.array([jnp.sin(phi) * jnp.cos(theta), jnp.sin(phi) * jnp.sin(theta), jnp.cos(phi)])
 
         push_mag = jax.random.uniform(brng, (), minval=self.vel_range[0], maxval=self.vel_range[1]) * self.linvel
         push_vel = push_dir * push_mag * curriculum_level
