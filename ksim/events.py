@@ -358,6 +358,6 @@ class ForcePushEvent(Event):
 
         return (time_remaining, force_duration, force)
 
-    def get_initial_event_state(self, rng: PRNGKeyArray) -> PyTree:
+    def get_initial_event_state(self, rng: PRNGKeyArray) -> tuple[Array, Array, Array]:
         minval, maxval = self.interval_range
-        return jax.random.uniform(rng, (), minval=minval, maxval=maxval), 0, jnp.zeros(6)
+        return (jax.random.uniform(rng, (), minval=minval, maxval=maxval), jnp.array(0.0, dtype=jnp.float32), jnp.zeros(6, dtype=jnp.float32))
