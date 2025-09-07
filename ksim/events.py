@@ -41,7 +41,7 @@ class Event(ABC):
         event_state: PyTree,
         curriculum_level: Array,
         rng: PRNGKeyArray,
-    ) -> tuple[PhysicsData, Array]:
+    ) -> tuple[PhysicsData, Array | tuple[Array, ...]]:
         """Apply the event to the data.
 
         Note that this function is called on every physics timestep, not
@@ -260,7 +260,6 @@ class ForcePushEvent(Event):
     force_range: tuple[float, float] = attrs.field(default=(0.0, 1.0))
     duration_range: tuple[float, float] = attrs.field()
     interval_range: tuple[float, float] = attrs.field()
-    scale: Scale = attrs.field(default=ConstantScale(scale=1.0), converter=convert_to_scale)
     body_id: int = attrs.field()
 
     @classmethod
@@ -274,7 +273,6 @@ class ForcePushEvent(Event):
         duration_range: tuple[float, float],
         interval_range: tuple[float, float],
         force_range: tuple[float, float] = (0.0, 1.0),
-        scale: Scale = ConstantScale(scale=1.0),
     ) -> Self:
         names_to_idxs = get_body_data_idx_by_name(model)
         if body_name not in names_to_idxs:
@@ -286,7 +284,6 @@ class ForcePushEvent(Event):
             duration_range=duration_range,
             interval_range=interval_range,
             force_range=force_range,
-            scale=scale,
             body_id=body_id,
         )
 
@@ -297,7 +294,7 @@ class ForcePushEvent(Event):
         event_state: PyTree,
         curriculum_level: Array,
         rng: PRNGKeyArray,
-    ) -> tuple[PhysicsData, Array]:
+    ) -> tuple[PhysicsData, tuple[Array, Array, Array]]:
         time_remaining, force_duration, force = event_state
 
         # Decrement timers by physics timestep
