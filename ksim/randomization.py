@@ -13,6 +13,7 @@ __all__ = [
     "IMUAlignmentRandomizer",
     "COMRandomizer",
     "AllBodiesCOMRandomizer",
+    "AllBodiesInertiaRandomizer",
 ]
 
 import functools
@@ -362,3 +363,64 @@ class AllBodiesCOMRandomizer(PhysicsRandomizer):
 
         new_ipos = model.body_ipos + ipos_offsets
         return {"body_ipos": new_ipos}
+
+
+@attrs.define(frozen=True, kw_only=True)
+class AllBodiesInertiaRandomizer(PhysicsRandomizer):
+    """Randomizes the inertia and mass for all bodies in the model, maintaining physical consistency.
+    
+    This randomizer:
+    1. Applies random scaling to body inertias
+    2. Updates mass proportionally
+    3. Recomputes inverse weights for both translational and rotational components
+    4. Updates both body and DOF inverse weights if available
+    """
+
+    scale: float = attrs.field(default=0.02)
+
+    def approx_invweights_from_body(self, mass: Array, inertia3: Array) -> tuple[Array, Array]:
+        """Compute inverse weights from mass and inertia.
+        
+        Args:
+            mass: Shape (nbody,) - mass per body
+            inertia3: Shape (nbody,3) - diagonal inertia elements per body
+        
+        Returns:
+            tuple of (inv_trn, inv_rot) arrays for translational and rotational components
+        """
+        inv_trn = 1.0 / mass  # translational scalar
+        inv_rot = jnp.mean(1.0 / inertia3, axis=1)  # mean of 1/Ix,1/Iy,1/Iz
+        return inv_trn, inv_rot
+
+    def __call__(self, model: PhysicsModel, rng: PRNGKeyArray) -> dict[str, Array]:
+        # Generate random scaling factors for inertia
+        rng, sub = jax.random.split(rng)
+        inertia_factors = 1.0 + jax.random.uniform(sub, shape=(model.nbody,), minval=-self.scale, maxval=self.scale)
+        
+        # Scale mass proportionally with inertia
+        mass_factors = inertia_factors  # maintain mass/inertia relationship
+        
+        # Apply scaling to mass and inertia
+        new_mass = model.body_mass * mass_factors
+        
+        # Handle inertia - body_inertia is already (nbody, 3)
+        new_inertia = model.body_inertia * inertia_factors[:, None]  # broadcast to (nbody, 3)
+        
+        # Compute new inverse weights
+        inv_trn, inv_rot = self.approx_invweights_from_body(new_mass, new_inertia)
+        # Stack to (nbody, 2) shape - each body gets [translational, rotational] weights
+        new_body_invweight0 = jnp.stack([inv_trn, inv_rot], axis=1)  # shape: (nbody, 2)
+        
+        updates = {
+            "body_mass": new_mass,
+            "body_inertia": new_inertia,  # shape: (nbody, 3)
+            "body_invweight0": new_body_invweight0,  # shape: (nbody, 2)
+        }
+
+        # Update per-DOF inverse weights - should be (1, nbody)
+        if hasattr(model, "dof_body"):
+            # Use rotational scalar for DOFs, reshape to (1, nbody)
+            dof_inv = inv_rot.reshape(1, -1)  # shape (1, nbody)
+            updates["dof_invweight0"] = dof_inv
+        
+        return updates
