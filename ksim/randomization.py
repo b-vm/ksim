@@ -349,22 +349,27 @@ class AllBodiesCOMRandomizer(PhysicsRandomizer):
 @attrs.define(frozen=True, kw_only=True)
 class AllBodiesInertiaRandomizer(PhysicsRandomizer):
     """Randomizes the inertia and mass for all bodies in the model.
-    
-    Does not update the inverse weights."""
+
+    Does not update the inverse weights.
+    """
 
     scale: float = attrs.field(default=0.02)
 
     def __call__(self, model: PhysicsModel, rng: PRNGKeyArray) -> dict[str, Array]:
         rng, sub = jax.random.split(rng)
         mass_scaling = 1.0 + jax.random.uniform(sub, shape=(model.nbody,), minval=-self.scale, maxval=self.scale)
-        inertia_perturbation = 1.0 + jax.random.uniform(sub, shape=(model.nbody, 3), minval=-self.scale, maxval=self.scale)
-        
+        inertia_perturbation = 1.0 + jax.random.uniform(
+            sub, shape=(model.nbody, 3), minval=-self.scale, maxval=self.scale
+        )
+
         new_mass = model.body_mass * mass_scaling
-        new_inertia = model.body_inertia * mass_scaling[:, None] * inertia_perturbation # scale with mass and change shape a bit
-        
+        new_inertia = (
+            model.body_inertia * mass_scaling[:, None] * inertia_perturbation
+        )  # scale with mass and change shape a bit
+
         updates = {
             "body_mass": new_mass,
             "body_inertia": new_inertia,
         }
-        
+
         return updates
