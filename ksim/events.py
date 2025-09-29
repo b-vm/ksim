@@ -29,6 +29,14 @@ def convert_to_scale(value: float | int | Scale) -> Scale:
     raise ValueError(f"Invalid scale: {value}")
 
 
+def convert_to_scale(value: float | int | Scale) -> Scale:
+    if isinstance(value, (float, int)):
+        return ConstantScale(scale=value)
+    if isinstance(value, Scale):
+        return value
+    raise ValueError(f"Invalid scale: {value}")
+
+
 @attrs.define(frozen=True, kw_only=True)
 class Event(ABC):
     """Base class for all events."""
