@@ -26,10 +26,10 @@ from ksim.types import RewardState, Trajectory
 @jax.tree_util.register_dataclass
 @dataclass
 class PPOInputs:
-    advantages_bt: Array
-    value_targets_bt: Array
-    gae_bt: Array
-    returns_bt: Array
+    advantages_t: Array
+    value_targets_t: Array
+    gae_t: Array
+    returns_t: Array
 
 
 @jax.tree_util.register_dataclass
@@ -52,10 +52,10 @@ class PPOVariables:
     jit_level=JitLevel.RL_CORE,
 )
 def compute_ppo_inputs(
-    values_bt: Array,
-    rewards_bt: Array,
-    dones_bt: Array,
-    successes_bt: Array,
+    values_t: Array,
+    rewards_t: Array,
+    dones_t: Array,
+    successes_t: Array,
     decay_gamma: float,
     gae_lambda: float,
     normalize_advantages: bool = False,
@@ -74,51 +74,51 @@ def compute_ppo_inputs(
         adv_t = delta + decay_gamma * gae_lambda * mask * adv_t_plus_1
         return (return_t, adv_t), (return_t, adv_t)
 
-    # values_shifted_t is V(s_{t+1}) for t < T_rollout, and V(s_T) for t = T_rollout
-    # Uses the last value of the trajectory as the bootstrap value.
-    values_shifted_t = jnp.concatenate([values_bt[..., 1:], values_bt[..., -1:]], axis=-1)
+    def compute_gae_and_targets_for_sample(
+        values_t: Array,
+        rewards_t: Array,
+        dones_t: Array,
+        successes_t: Array,
+    ) -> PPOInputs:
+        # values_shifted_t is V(s_{t+1}) for t < T_rollout, and V(s_T) for t = T_rollout
+        # Uses the last value of the trajectory as the bootstrap value.
+        values_shifted_t = jnp.concatenate([values_t[1:], jnp.expand_dims(values_t[-1], 0)], axis=0)
 
-    # 1-step bootstrap on successful terminations.
-    trunc_mask_bt = jnp.where(successes_bt, 1.0, 0.0)
-    bootstrapped_rewards_bt = (1 - decay_gamma) * rewards_bt + decay_gamma * values_bt * trunc_mask_bt
+        # 1-step bootstrap on successful terminations.
+        trunc_mask_t = jnp.where(successes_t, 1.0, 0.0)
+        discount_horizon = 1 / (1 - decay_gamma)
+        bootstrapped_rewards_t = rewards_t / discount_horizon + decay_gamma * values_t * trunc_mask_t
 
-    mask_bt = jnp.where(dones_bt, 0.0, 1.0)
-    deltas_bt = bootstrapped_rewards_bt + decay_gamma * values_shifted_t * mask_bt - values_bt
+        mask_t = jnp.where(dones_t, 0.0, 1.0)
 
-    # Transpose for scan.
-    bootstrapped_rewards_tb = jnp.swapaxes(bootstrapped_rewards_bt, -1, -2)
-    deltas_tb = jnp.swapaxes(deltas_bt, -1, -2)
-    mask_tb = jnp.swapaxes(mask_bt, -1, -2)
+        # Compute returns and GAE.
+        deltas_t = bootstrapped_rewards_t + decay_gamma * values_shifted_t * mask_t - values_t
+        _, (returns_t, gae_t) = xax.scan(
+            returns_and_gae_scan_fn,
+            (jnp.zeros_like(rewards_t[-1]), jnp.zeros_like(deltas_t[-1])),
+            (bootstrapped_rewards_t, deltas_t, mask_t),
+            reverse=True,
+            jit_level=JitLevel.RL_CORE,
+        )
 
-    # Compute returns and GAE.
-    _, (returns_tb, gae_tb) = xax.scan(
-        returns_and_gae_scan_fn,
-        (jnp.zeros_like(rewards_bt[..., -1]), jnp.zeros_like(deltas_bt[..., -1])),
-        (bootstrapped_rewards_tb, deltas_tb, mask_tb),
-        reverse=True,
-        jit_level=JitLevel.RL_CORE,
-    )
+        # Get the value targets.
+        value_targets_t = returns_t if monte_carlo_returns else gae_t + values_t
 
-    # Transpose back.
-    returns_bt = jnp.swapaxes(returns_tb, -1, -2)
-    gae_bt = jnp.swapaxes(gae_tb, -1, -2)
+        return PPOInputs(
+            advantages_t=gae_t,
+            value_targets_t=value_targets_t,
+            gae_t=gae_t,
+            returns_t=returns_t,
+        )
 
-    # Get the value targets.
-    value_targets_bt = returns_bt if monte_carlo_returns else gae_bt + values_bt
-
-    inputs = PPOInputs(
-        advantages_bt=gae_bt,
-        value_targets_bt=value_targets_bt,
-        gae_bt=gae_bt,
-        returns_bt=returns_bt,
-    )
+    # Compute the advantages and value targets for each sample in the batch.
+    # Pass successes_t to the inner function for 1-step bootstrap on successful terminations.
+    inputs = compute_gae_and_targets_for_sample(values_t, rewards_t, dones_t, successes_t)
 
     if normalize_advantages:
-        adv_mean = inputs.advantages_bt.mean(keepdims=True)
-        adv_std = inputs.advantages_bt.std(keepdims=True).clip(min=1e-6)
-        inputs.advantages_bt = (inputs.advantages_bt - adv_mean) / adv_std
+        inputs.advantages_t = inputs.advantages_t / jnp.maximum(inputs.advantages_t.std(axis=-1, keepdims=True), 1e-6)
 
-    return jax.lax.stop_gradient(inputs)
+    return inputs
 
 
 @xax.jit(static_argnames=["clip_param"], jit_level=JitLevel.HELPER_FUNCTIONS)
@@ -181,69 +181,81 @@ def compute_ppo_loss(
             on_policy_variables.values,
             off_policy_variables.log_probs,
             off_policy_variables.values,
-            ppo_inputs.advantages_bt,
-            ppo_inputs.value_targets_bt,
+            ppo_inputs.advantages_t,
+            ppo_inputs.value_targets_t,
         ]
         + ([] if off_policy_variables.aux_losses is None else list(off_policy_variables.aux_losses.values())),
         prefix_len=1,
     )
 
     # The following should not have any singleton dimensions.
-    chex.assert_rank(on_policy_variables.values, 2)
-    chex.assert_rank(off_policy_variables.values, 2)
-    chex.assert_rank(ppo_inputs.advantages_bt, 2)
-    chex.assert_rank(ppo_inputs.value_targets_bt, 2)
+    chex.assert_rank(on_policy_variables.values, 1)
+    chex.assert_rank(off_policy_variables.values, 1)
+    chex.assert_rank(ppo_inputs.advantages_t, 1)
+    chex.assert_rank(ppo_inputs.value_targets_t, 1)
     if off_policy_variables.aux_losses is not None:
         for aux_loss in off_policy_variables.aux_losses.values():
-            chex.assert_rank(aux_loss, 2)
+            chex.assert_rank(aux_loss, 1)
 
     # Log probs should have an extra dimension for the number of actions.
-    chex.assert_rank(on_policy_variables.log_probs, 3)
-    chex.assert_rank(off_policy_variables.log_probs, 3)
+    chex.assert_rank(on_policy_variables.log_probs, 2)
+    chex.assert_rank(off_policy_variables.log_probs, 2)
     if off_policy_variables.entropy is not None:
-        chex.assert_rank(off_policy_variables.entropy, 3)
+        chex.assert_rank(off_policy_variables.entropy, 2)
 
-    # Preventing underflow / overflow in calculating the ratio.
-    log_ratio = jnp.sum(off_policy_variables.log_probs - on_policy_variables.log_probs, axis=-1)
-    ratio = jnp.exp(jnp.clip(log_ratio, -log_clip_value, log_clip_value))
-    clipped_ratio = jnp.clip(ratio, 1 - clip_param, 1 + clip_param)
-    surrogate_1 = ratio * ppo_inputs.advantages_bt
-    surrogate_2 = clipped_ratio * ppo_inputs.advantages_bt
-    policy_loss = -jnp.minimum(surrogate_1, surrogate_2)
+    def compute_loss_for_sample(
+        on_policy_variables: PPOVariables,
+        off_policy_variables: PPOVariables,
+        ppo_inputs: PPOInputs,
+    ) -> dict[str, Array]:
+        # Preventing underflow / overflow in calculating the ratio.
+        log_ratio = jnp.sum(off_policy_variables.log_probs - on_policy_variables.log_probs, axis=-1)
+        ratio = jnp.exp(jnp.clip(log_ratio, -log_clip_value, log_clip_value))
+        clipped_ratio = jnp.clip(ratio, 1 - clip_param, 1 + clip_param)
+        surrogate_1 = ratio * ppo_inputs.advantages_t
+        surrogate_2 = clipped_ratio * ppo_inputs.advantages_t
+        policy_loss = -jnp.minimum(surrogate_1, surrogate_2)
 
-    # Computes the value loss, with or without clipping.
-    if use_clipped_value_loss:
-        value_objective = 0.5 * clipped_value_loss(
-            target_values=on_policy_variables.values,
-            values=off_policy_variables.values,
-            value_targets=ppo_inputs.value_targets_bt,
-            clip_param=clip_param,
-        )
-    else:
-        value_objective = 0.5 * (ppo_inputs.value_targets_bt - off_policy_variables.values) ** 2
-    value_loss = value_objective * value_loss_coef
+        # Computes the value loss, with or without clipping.
+        if use_clipped_value_loss:
+            value_objective = 0.5 * clipped_value_loss(
+                target_values=on_policy_variables.values,
+                values=off_policy_variables.values,
+                value_targets=ppo_inputs.value_targets_t,
+                clip_param=clip_param,
+            )
+        else:
+            value_objective = 0.5 * (ppo_inputs.value_targets_t - off_policy_variables.values) ** 2
+        value_loss = value_objective * value_loss_coef
 
-    # Minimize the KL divergence between the two policies, to discourage large changes.
-    kl_div = (on_policy_variables.log_probs - off_policy_variables.log_probs).sum(axis=-1)
-    kl_loss = kl_div * kl_coef
+        # Minimize the KL divergence between the two policies, to discourage large changes.
+        kl_div = (on_policy_variables.log_probs - off_policy_variables.log_probs).sum(axis=-1)
+        kl_loss = kl_div * kl_coef
 
-    losses = {
-        "policy": policy_loss,
-        "value": value_loss,
-        "kl": kl_loss,
-    }
+        losses = {
+            "policy": policy_loss,
+            "value": value_loss,
+            "kl": kl_loss,
+        }
 
-    # Maximize the entropy of the policy, to encourage exploration.
-    if off_policy_variables.entropy is not None:
-        entropy_loss = -off_policy_variables.entropy.sum(axis=-1) * entropy_coef
-        losses["entropy"] = entropy_loss
+        # Maximize the entropy of the policy, to encourage exploration.
+        if off_policy_variables.entropy is not None:
+            entropy_loss = -off_policy_variables.entropy.sum(axis=-1) * entropy_coef
+            losses["entropy"] = entropy_loss
 
-    # Adds any additional auxiliary losses.
-    if off_policy_variables.aux_losses is not None:
-        for name, aux_loss_term in off_policy_variables.aux_losses.items():
-            losses[name] = aux_loss_term
+        # Adds any additional auxiliary losses.
+        if off_policy_variables.aux_losses is not None:
+            for name, aux_loss_term in off_policy_variables.aux_losses.items():
+                losses[name] = aux_loss_term
 
-    return losses
+        return losses
+
+    par_fn = xax.vmap(compute_loss_for_sample, in_axes=0, jit_level=JitLevel.RL_CORE)
+
+    # Computes the vectorized loss.
+    losses_t = par_fn(on_policy_variables, off_policy_variables, ppo_inputs)
+
+    return losses_t
 
 
 @jax.tree_util.register_dataclass
@@ -275,14 +287,6 @@ class PPOConfig(RLConfig):
     kl_coef: float = xax.field(
         value=1e-3,
         help="KL divergence coefficient for PPO, to discourage large changes in the policy.",
-    )
-    adaptive_kl: bool = xax.field(
-        value=False,
-        help="If true, adapt kl_coef online to target desired_kl.",
-    )
-    desired_kl: float = xax.field(
-        value=1e-2,
-        help="Target KL divergence between old and new policy when adaptive_kl is enabled.",
     )
     log_clip_value: float = xax.field(
         value=5.0,
@@ -334,7 +338,7 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
 
     def get_ppo_metrics(
         self,
-        losses_bt: dict[str, Array],
+        losses_t: dict[str, Array],
         ppo_inputs: PPOInputs,
         on_policy_variables: PPOVariables,
         off_policy_variables: PPOVariables,
@@ -346,7 +350,7 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
         format and will be logged as a distribution.
 
         Args:
-            losses_bt: The dictionary of losses.
+            losses_t: The dictionary of losses.
             ppo_inputs: The PPO inputs.
             on_policy_variables: The variables for the original policy.
             off_policy_variables: The variables for the new policy.
@@ -359,13 +363,10 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
             "off_policy_log_probs": off_policy_variables.log_probs.mean(0).flatten(),
             "on_policy_values": on_policy_variables.values.mean(0).flatten(),
             "off_policy_values": off_policy_variables.values.mean(0).flatten(),
-            "value_targets": ppo_inputs.value_targets_bt.mean(),
-            "advantages": ppo_inputs.advantages_bt.mean(),
+            "value_targets": ppo_inputs.value_targets_t.mean(),
+            "advantages": ppo_inputs.advantages_t.mean(),
         }
-        # KL metric between on- and off-policy distributions
-        kl_div = (on_policy_variables.log_probs - off_policy_variables.log_probs).sum(axis=-1).mean()
-        metrics["kl"] = kl_div
-        for name, loss in losses_bt.items():
+        for name, loss in losses_t.items():
             metrics[f"loss_{name}"] = loss.mean()
         if off_policy_variables.entropy is not None:
             metrics["entropy"] = off_policy_variables.entropy.mean(0).flatten()
@@ -398,10 +399,10 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
         """
         metrics = {
             "values": off_policy_variables.values,
-            "value_targets": ppo_inputs.value_targets_bt,
-            "advantages": ppo_inputs.advantages_bt,
-            "gae": ppo_inputs.gae_bt,
-            "returns": ppo_inputs.returns_bt,
+            "value_targets": ppo_inputs.value_targets_t,
+            "advantages": ppo_inputs.advantages_t,
+            "gae": ppo_inputs.gae_t,
+            "returns": ppo_inputs.returns_t,
         }
         for name, loss in losses_t.items():
             metrics[f"loss_{name}"] = loss
@@ -423,7 +424,6 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
         init_carry: PyTree,
         on_policy_variables: PPOVariables,
         rng: PRNGKeyArray,
-        kl_scale: float,
     ) -> tuple[Array, xax.FrozenDict[str, Array]]:
         """Computes the PPO loss and additional metrics.
 
@@ -435,7 +435,6 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
             init_carry: The initial carry for the model.
             on_policy_variables: The PPO variables from the on-policy rollout.
             rng: A random seed.
-            kl_scale: A runtime scaling factor applied to the KL loss term to support adaptive KL.
 
         Returns:
             A tuple containing the loss value as a scalar, a dictionary of
@@ -443,49 +442,58 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
         """
         model = eqx.combine(model_arr, model_static)
 
-        ppo_fn = xax.vmap(self.get_ppo_variables, in_axes=(None, 0, 0, 0), jit_level=JitLevel.RL_CORE)
-        rngs = jax.random.split(rng, trajectories.done.shape[0])
-        off_policy_variables, _ = ppo_fn(model, trajectories, init_carry, rngs)
+        def loss_and_metrics_fn(
+            trajectory: Trajectory,
+            rewards: RewardState,
+            init_model_carry: PyTree,
+            on_policy_variables: PPOVariables,
+            rng: PRNGKeyArray,
+        ) -> tuple[Array, xax.FrozenDict[str, Array]]:
+            off_policy_variables, _ = self.get_ppo_variables(model, trajectory, init_model_carry, rng)
 
-        ppo_inputs = compute_ppo_inputs(
-            values_bt=off_policy_variables.values,
-            rewards_bt=rewards.total,
-            dones_bt=trajectories.done,
-            successes_bt=trajectories.success,
-            decay_gamma=self.config.gamma,
-            gae_lambda=self.config.lam,
-            normalize_advantages=self.config.normalize_advantages,
-            monte_carlo_returns=self.config.monte_carlo_returns,
-        )
+            ppo_inputs = compute_ppo_inputs(
+                values_t=jax.lax.stop_gradient(off_policy_variables.values),
+                rewards_t=rewards.total,
+                dones_t=trajectory.done,
+                successes_t=trajectory.success,
+                decay_gamma=self.config.gamma,
+                gae_lambda=self.config.lam,
+                normalize_advantages=self.config.normalize_advantages,
+                monte_carlo_returns=self.config.monte_carlo_returns,
+            )
 
-        losses_bt = compute_ppo_loss(
-            ppo_inputs=ppo_inputs,
-            on_policy_variables=on_policy_variables,
-            off_policy_variables=off_policy_variables,
-            clip_param=self.config.clip_param,
-            value_loss_coef=self.config.value_loss_coef,
-            entropy_coef=self.config.entropy_coef,
-            kl_coef=self.config.kl_coef,
-            log_clip_value=self.config.log_clip_value,
-            use_clipped_value_loss=self.config.use_clipped_value_loss,
-        )
+            losses_t = compute_ppo_loss(
+                ppo_inputs=ppo_inputs,
+                on_policy_variables=on_policy_variables,
+                off_policy_variables=off_policy_variables,
+                clip_param=self.config.clip_param,
+                value_loss_coef=self.config.value_loss_coef,
+                entropy_coef=self.config.entropy_coef,
+                kl_coef=self.config.kl_coef,
+                log_clip_value=self.config.log_clip_value,
+                use_clipped_value_loss=self.config.use_clipped_value_loss,
+            )
 
-        # Rescale KL loss dynamically to support adaptive KL without recompilation.
-        losses_bt = dict(losses_bt)
-        losses_bt["kl"] = losses_bt["kl"] * kl_scale
+            metrics = self.get_ppo_metrics(
+                losses_t=losses_t,
+                ppo_inputs=ppo_inputs,
+                on_policy_variables=on_policy_variables,
+                off_policy_variables=off_policy_variables,
+            )
 
-        metrics = self.get_ppo_metrics(
-            losses_bt=losses_bt,
-            ppo_inputs=ppo_inputs,
-            on_policy_variables=on_policy_variables,
-            off_policy_variables=off_policy_variables,
-        )
+            # Mean over all non-masked trajectories.
+            num_valid = jnp.sum(~trajectory.done)
+            loss_t = jnp.stack(list(losses_t.values()), axis=-1).sum(axis=-1)
+            loss = loss_t.sum() / (num_valid + 1e-6)
 
-        # Mean loss over all losses.
-        loss_bt = jnp.stack(list(losses_bt.values()), axis=-1).sum(axis=-1)
-        loss = loss_bt.mean()
+            return loss, xax.freeze_dict(metrics)
 
-        return loss, xax.freeze_dict(metrics)
+        # Gets the loss and metrics for each trajectory in the batch.
+        rngs = jax.random.split(rng, rewards.total.shape[0])
+        par_fn = xax.vmap(loss_and_metrics_fn, in_axes=0, jit_level=JitLevel.RL_CORE)
+        loss, metrics = par_fn(trajectories, rewards, init_carry, on_policy_variables, rngs)
+
+        return loss.mean(), metrics
 
     @xax.jit(
         static_argnames=["self", "constants"],
@@ -514,10 +522,6 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
             has_aux=True,
             jit_level=JitLevel.RL_CORE,
         )
-        # Compute runtime KL scaling factor for adaptive KL.
-        current_kl_coef = carry.shared_state.aux_values["kl_coef"] if self.config.adaptive_kl else self.config.kl_coef
-        kl_scale = current_kl_coef / self.config.kl_coef
-
         grads, ppo_metrics = loss_fn(
             model_arr,
             model_static,
@@ -526,7 +530,6 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
             carry.env_states.model_carry,
             on_policy_variables,
             rng,
-            kl_scale,
         )
 
         # Applies the gradients.
@@ -542,25 +545,6 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
             ),
             opt_state=xax.tuple_insert(carry.opt_state, 0, new_opt_state),
         )
-
-        # If enabled, adapt KL coefficient toward the desired KL.
-        if self.config.adaptive_kl:
-            kl_mean = ppo_metrics["kl"].mean()
-            desired = self.config.desired_kl
-            factor = 1.5
-            new_kl_coef = jnp.where(kl_mean > desired * factor, current_kl_coef * factor, current_kl_coef)
-            new_kl_coef = jnp.where(kl_mean < desired / factor, new_kl_coef / factor, new_kl_coef)
-            new_kl_coef = jnp.clip(new_kl_coef, 1e-8, 1e2)
-
-            aux_vals = {**dict(carry.shared_state.aux_values)}
-            aux_vals["kl_coef"] = new_kl_coef
-            carry = replace(
-                carry,
-                shared_state=replace(
-                    carry.shared_state,
-                    aux_values=xax.freeze_dict(aux_vals),
-                ),
-            )
 
         return carry, ppo_metrics
 
@@ -580,18 +564,6 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
     ) -> tuple[RLLoopCarry, xax.FrozenDict[str, Array]]:
         rng, onp_rng, passes_rng = jax.random.split(rng, 3)
 
-        # Initialize adaptive KL coefficient in aux_values if needed.
-        if self.config.adaptive_kl and "kl_coef" not in carry.shared_state.aux_values:
-            init_aux = {**dict(carry.shared_state.aux_values)}
-            init_aux["kl_coef"] = jnp.asarray(self.config.kl_coef)
-            carry = replace(
-                carry,
-                shared_state=replace(
-                    carry.shared_state,
-                    aux_values=xax.freeze_dict(init_aux),
-                ),
-            )
-
         # Gets the policy model.
         policy_model_arr = carry.shared_state.model_arrs[0]
         policy_model_static = constants.constants.model_statics[0]
@@ -601,7 +573,7 @@ class PPOTask(RLTask[Config], Generic[Config], ABC):
         on_policy_rngs = jax.random.split(onp_rng, trajectories.done.shape[0])
         ppo_fn = xax.vmap(self.get_ppo_variables, in_axes=(None, 0, 0, 0), jit_level=JitLevel.RL_CORE)
         on_policy_variables, _ = ppo_fn(policy_model, trajectories, carry.env_states.model_carry, on_policy_rngs)
-        on_policy_variables = jax.lax.stop_gradient(on_policy_variables)
+        on_policy_variables = jax.tree.map(lambda x: jax.lax.stop_gradient(x), on_policy_variables)
 
         # Loops over the trajectory batches and applies gradient updates.
         def update_model_in_batch(

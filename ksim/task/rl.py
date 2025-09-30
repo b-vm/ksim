@@ -212,16 +212,12 @@ def get_rewards(
             reward_val, reward_carry = reward.get_reward_stateful(trajectory, reward_carry)
         else:
             reward_val = reward.get_reward(trajectory)
-
-        # Gets the reward scale.
-        scale = reward.scale.get_scale(curriculum_level)
-        if reward.is_penalty:
-            scale = -scale
-
         if isinstance(reward_val, Mapping):
-            reward_val = {f"{name}/{k}": v * scale for k, v in reward_val.items()}
+            reward_val = {f"{name}/{k}": v * reward.scale for k, v in reward_val.items()}
         else:
-            reward_val = {name: reward_val * scale}
+            reward_val = {name: reward_val * reward.scale}
+        if reward.scale_by_curriculum:
+            reward_val = {k: v * curriculum_level for k, v in reward_val.items()}
 
         for k, v in reward_val.items():
             if v.shape != trajectory.done.shape:
@@ -464,10 +460,6 @@ class RLConfig(xax.Config):
     plot_figsize: tuple[float, float] = xax.field(
         value=(8, 4),
         help="The size of the figure for each plot.",
-    )
-    all_rewards_plot_figsize_multiplier: float = xax.field(
-        value=1.5,
-        help="The multiplier for the figure size of the all rewards plot.",
     )
     render_shadow: bool = xax.field(
         value=False,
@@ -1052,8 +1044,8 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
         )
 
         # Convert ternary terminations to binary arrays.
-        done = jax.tree.reduce(jnp.logical_or, [t != 0 for t in terminations.values()])
-        success = jax.tree.reduce(jnp.logical_and, [t != -1 for t in terminations.values()]) & done
+        terminated = jax.tree.reduce(jnp.logical_or, [t != 0 for t in terminations.values()])
+        success = jax.tree.reduce(jnp.logical_and, [t != -1 for t in terminations.values()]) & terminated
 
         # Combines all the relevant data into a single object. Lives up here to
         # avoid accidentally incorporating information it shouldn't access to.
@@ -1067,7 +1059,7 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
             command=env_states.commands,
             event_state=next_physics_state.event_states,
             action=action.action,
-            done=done,
+            done=terminated,
             success=success,
             timestep=next_physics_state.data.time,
             curriculum_level=env_states.curriculum_state.level,
@@ -1076,7 +1068,7 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
         )
 
         next_physics_state = jax.lax.cond(
-            done,
+            terminated,
             lambda: constants.engine.reset(
                 shared_state.physics_model,
                 env_states.curriculum_state.level,
@@ -1087,7 +1079,7 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
 
         # Conditionally reset on termination.
         next_commands = jax.lax.cond(
-            done,
+            terminated,
             lambda: get_initial_commands(
                 rng=cmd_rng,
                 physics_data=next_physics_state.data,
@@ -1104,7 +1096,7 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
         )
 
         next_obs_carry = jax.lax.cond(
-            done,
+            terminated,
             lambda: get_initial_obs_carry(
                 rng=obs_carry_rng,
                 physics_state=next_physics_state,
@@ -1114,7 +1106,7 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
         )
 
         next_model_carry = jax.lax.cond(
-            done,
+            terminated,
             lambda: self.get_initial_model_carry(policy_model, carry_rng),
             lambda: action.carry,
         )
@@ -1331,14 +1323,6 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
             bbox = draw.textbbox((0, 0), text)
             draw.rectangle((8, 8, 12 + bbox[2] - bbox[0], 12 + bbox[3] - bbox[1]), fill="white")
             draw.text((10, 10), text, fill="black")
-
-            # Overlays the time on the frame.
-            cur_time = indices[frame_id] * self.config.ctrl_dt
-            text = f"Time {cur_time:.2f}s"
-            bbox = draw.textbbox((0, 0), text)
-            draw.rectangle((8, 23, 12 + bbox[2] - bbox[0], 27 + bbox[3] - bbox[1]), fill="white")
-            draw.text((10, 25), text, fill="black")
-
             frame = np.array(frame_img)
 
             # Draws an RGB patch in the bottom right corner of the frame.
@@ -1418,9 +1402,8 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
                         )
                         processed_value = processed_value[..., : self.config.max_values_per_plot]
 
-                    indices = np.arange(processed_value.shape[0], dtype=np.float32) * self.config.ctrl_dt
                     for i in range(processed_value.shape[1]):
-                        ax.plot(indices, processed_value[:, i], label=f"{i}")
+                        ax.plot(processed_value[:, i], label=f"{i}")
 
                     if processed_value.shape[1] > 1:
                         ax.legend()
@@ -1441,17 +1424,18 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
                 if processed_value.shape[1] > 1:
                     processed_value = processed_value.mean(axis=1)
 
-                indices = np.arange(processed_value.shape[0], dtype=np.float32) * self.config.ctrl_dt
-                ax.plot(indices, processed_value, label=key, alpha=0.8)
+                ax.plot(processed_value, label=key, alpha=0.8)
 
             ax.set_title("All Rewards")
-            ax.legend(loc="best", fontsize=8, ncol=(len(logged_traj.rewards.components) + 14) // 15)
+            ax.legend(loc="center left", bbox_to_anchor=(1.05, 0.5))
             fig.tight_layout()
+            # Add extra space to the right for the legend
+            fig.subplots_adjust(right=0.7)
 
         # Make the plot wider so the legend fits
         combined_rewards_figsize = (
-            self.config.plot_figsize[0] * self.config.all_rewards_plot_figsize_multiplier,
-            self.config.plot_figsize[1] * self.config.all_rewards_plot_figsize_multiplier,
+            self.config.plot_figsize[0] * 1.3,
+            self.config.plot_figsize[1],
         )
         img = create_plot_image(combined_rewards_figsize, plot_combined_rewards)
         log_callback("_components", img, "🎁 reward images")
@@ -1565,7 +1549,7 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
         return {
             "episode_length": trajectories.episode_length(),
             "mean_terminations": mean_terminations,
-            **{f"prct/{key}": (value.sum().astype(float) / num_terminations) for key, value in kvs},
+            **{f"prct/{key}": ((value != 0).sum() / num_terminations) for key, value in kvs},
         }
 
     def get_markers(
@@ -2571,7 +2555,6 @@ class RLTask(xax.Task[Config, InitParams], Generic[Config], ABC):
                                     key=key,
                                     value=value,
                                     namespace=namespace,
-                                    target_resolution=None,
                                 ),
                             )
 
