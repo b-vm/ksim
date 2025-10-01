@@ -29,14 +29,6 @@ def convert_to_scale(value: float | int | Scale) -> Scale:
     raise ValueError(f"Invalid scale: {value}")
 
 
-def convert_to_scale(value: float | int | Scale) -> Scale:
-    if isinstance(value, (float, int)):
-        return ConstantScale(scale=value)
-    if isinstance(value, Scale):
-        return value
-    raise ValueError(f"Invalid scale: {value}")
-
-
 @attrs.define(frozen=True, kw_only=True)
 class Event(ABC):
     """Base class for all events."""
@@ -49,7 +41,7 @@ class Event(ABC):
         event_state: PyTree,
         curriculum_level: Array,
         rng: PRNGKeyArray,
-    ) -> tuple[PhysicsData, Array]:
+    ) -> tuple[PhysicsData, PyTree]:
         """Apply the event to the data.
 
         Note that this function is called on every physics timestep, not
@@ -67,7 +59,7 @@ class Event(ABC):
         """
 
     @abstractmethod
-    def get_initial_event_state(self, rng: PRNGKeyArray) -> Array:
+    def get_initial_event_state(self, rng: PRNGKeyArray) -> PyTree:
         """Get the initial info for the event."""
 
 
