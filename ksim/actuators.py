@@ -183,8 +183,12 @@ class PositionActuators(_PositionActuatorsBase, StatefulActuators):
         kp_scale = jax.random.uniform(rng_kp, (num,), minval=kp_low, maxval=kp_high)
         kd_scale = jax.random.uniform(rng_kd, (num,), minval=kd_low, maxval=kd_high)
         # Sample symmetric biases: uniform in [-scale, +scale]
-        action_bias = jax.random.uniform(rng_action_bias, (num,), minval=-self._action_bias_scale, maxval=self._action_bias_scale)
-        torque_bias = jax.random.uniform(rng_torque_bias, (num,), minval=-self._torque_bias_scale, maxval=self._torque_bias_scale)
+        action_bias = jax.random.uniform(
+            rng_action_bias, (num,), minval=-self._action_bias_scale, maxval=self._action_bias_scale
+        )
+        torque_bias = jax.random.uniform(
+            rng_torque_bias, (num,), minval=-self._torque_bias_scale, maxval=self._torque_bias_scale
+        )
 
         return {
             "kp_scale": kp_scale,
@@ -224,6 +228,7 @@ class PositionActuators(_PositionActuatorsBase, StatefulActuators):
         ctrl = ctrl + actuator_state["torque_bias"]
 
         return jnp.clip(ctrl, -self.ctrl_clip, self.ctrl_clip), actuator_state
+
 
 class PositionVelocityActuator(_PositionActuatorsBase, StatefulActuators):
     """MIT Cheetah-style actuator controller operating on both position and velocity with per-episode randomizations."""
@@ -285,9 +290,15 @@ class PositionVelocityActuator(_PositionActuatorsBase, StatefulActuators):
         kp_scale = jax.random.uniform(rng_kp, (num,), minval=kp_low, maxval=kp_high)
         kd_scale = jax.random.uniform(rng_kd, (num,), minval=kd_low, maxval=kd_high)
         # Sample symmetric biases: uniform in [-scale, +scale]
-        pos_action_bias = jax.random.uniform(rng_pos_bias, (num,), minval=-self._pos_action_bias_scale, maxval=self._pos_action_bias_scale)
-        vel_action_bias = jax.random.uniform(rng_vel_bias, (num,), minval=-self._vel_action_bias_scale, maxval=self._vel_action_bias_scale)
-        torque_bias = jax.random.uniform(rng_torque_bias, (num,), minval=-self._torque_bias_scale, maxval=self._torque_bias_scale)
+        pos_action_bias = jax.random.uniform(
+            rng_pos_bias, (num,), minval=-self._pos_action_bias_scale, maxval=self._pos_action_bias_scale
+        )
+        vel_action_bias = jax.random.uniform(
+            rng_vel_bias, (num,), minval=-self._vel_action_bias_scale, maxval=self._vel_action_bias_scale
+        )
+        torque_bias = jax.random.uniform(
+            rng_torque_bias, (num,), minval=-self._torque_bias_scale, maxval=self._torque_bias_scale
+        )
 
         return {
             "kp_scale": kp_scale,
