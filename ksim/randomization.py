@@ -474,9 +474,7 @@ class CollisionBodyRandomizer(PhysicsRandomizer):
         for geom_name in geom_names:
             if geom_name not in names_to_idxs:
                 available_geoms = list(names_to_idxs.keys())
-                raise ValueError(
-                    f"Geom name '{geom_name}' not found in model. " f"Available geoms: {available_geoms}"
-                )
+                raise ValueError(f"Geom name '{geom_name}' not found in model. Available geoms: {available_geoms}")
             geom_ids.append(names_to_idxs[geom_name])
 
         return cls(
