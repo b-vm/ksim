@@ -144,28 +144,25 @@ class PositionActuators(_PositionActuatorsBase, StatefulActuators):
         torque_noise: Noise | None = None,
         action_scale: float = 1.0,
         *,
-        kp_scale_range: tuple[float, float] = (1.0, 1.0),
-        kd_scale_range: tuple[float, float] = (1.0, 1.0),
+        kp_scale: float = 1.0,
+        kd_scale: float = 1.0,
         action_bias_scale: float = 0.0,
         torque_bias_scale: float = 0.0,
     ) -> None:
         # Reuse base initialization to build base gains/limits and noises.
         _PositionActuatorsBase.__init__(self, physics_model, metadata, action_noise, torque_noise, action_scale)
 
-        low_kp, high_kp = kp_scale_range
-        low_kd, high_kd = kd_scale_range
-
-        if low_kp > high_kp:
-            raise ValueError("kp_scale_range must be (low, high)")
-        if low_kd > high_kd:
-            raise ValueError("kd_scale_range must be (low, high)")
+        if kp_scale <= 0:
+            raise ValueError("kp_scale must be positive")
+        if kd_scale <= 0:
+            raise ValueError("kd_scale must be positive")
         if action_bias_scale < 0:
             raise ValueError("action_bias_scale must be non-negative")
         if torque_bias_scale < 0:
             raise ValueError("torque_bias_scale must be non-negative")
 
-        self._kp_scale_range = kp_scale_range
-        self._kd_scale_range = kd_scale_range
+        self._kp_scale_range = (1.0 / kp_scale, 1.0 * kp_scale)
+        self._kd_scale_range = (1.0 / kd_scale, 1.0 * kd_scale)
         self._action_bias_scale = action_bias_scale
         self._torque_bias_scale = torque_bias_scale
 
@@ -242,8 +239,8 @@ class PositionVelocityActuator(_PositionActuatorsBase, StatefulActuators):
         torque_noise: Noise | None = None,
         action_scale: float = 1.0,
         *,
-        kp_scale_range: tuple[float, float] = (1.0, 1.0),
-        kd_scale_range: tuple[float, float] = (1.0, 1.0),
+        kp_scale: float = 1.0,
+        kd_scale: float = 1.0,
         pos_action_bias_scale: float = 0.0,
         vel_action_bias_scale: float = 0.0,
         torque_bias_scale: float = 0.0,
@@ -259,13 +256,10 @@ class PositionVelocityActuator(_PositionActuatorsBase, StatefulActuators):
 
         self.vel_action_noise = NoNoise() if vel_action_noise is None else vel_action_noise
 
-        low_kp, high_kp = kp_scale_range
-        low_kd, high_kd = kd_scale_range
-
-        if low_kp > high_kp:
-            raise ValueError("kp_scale_range must be (low, high)")
-        if low_kd > high_kd:
-            raise ValueError("kd_scale_range must be (low, high)")
+        if kp_scale <= 0:
+            raise ValueError("kp_scale must be positive")
+        if kd_scale <= 0:
+            raise ValueError("kd_scale must be positive")
         if pos_action_bias_scale < 0:
             raise ValueError("pos_action_bias_scale must be non-negative")
         if vel_action_bias_scale < 0:
@@ -273,8 +267,8 @@ class PositionVelocityActuator(_PositionActuatorsBase, StatefulActuators):
         if torque_bias_scale < 0:
             raise ValueError("torque_bias_scale must be non-negative")
 
-        self._kp_scale_range = kp_scale_range
-        self._kd_scale_range = kd_scale_range
+        self._kp_scale_range = (1.0 / kp_scale, 1.0 * kp_scale)
+        self._kd_scale_range = (1.0 / kd_scale, 1.0 * kd_scale)
         self._pos_action_bias_scale = pos_action_bias_scale
         self._vel_action_bias_scale = vel_action_bias_scale
         self._torque_bias_scale = torque_bias_scale
