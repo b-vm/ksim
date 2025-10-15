@@ -148,6 +148,7 @@ class PositionActuators(_PositionActuatorsBase, StatefulActuators):
         kd_scale: float = 1.0,
         action_bias_scale: float = 0.0,
         torque_bias_scale: float = 0.0,
+        torque_limit_scale: float = 1.0,
     ) -> None:
         # Reuse base initialization to build base gains/limits and noises.
         _PositionActuatorsBase.__init__(self, physics_model, metadata, action_noise, torque_noise, action_scale)
@@ -160,9 +161,12 @@ class PositionActuators(_PositionActuatorsBase, StatefulActuators):
             raise ValueError("action_bias_scale must be non-negative")
         if torque_bias_scale < 0:
             raise ValueError("torque_bias_scale must be non-negative")
+        if torque_limit_scale <= 0:
+            raise ValueError("torque_limit_scale must be positive")
 
         self._kp_scale_range = (1.0 / kp_scale, 1.0 * kp_scale)
         self._kd_scale_range = (1.0 / kd_scale, 1.0 * kd_scale)
+        self._torque_limit_scale_range = (1.0 / torque_limit_scale, 1.0 * torque_limit_scale)
         self._action_bias_scale = action_bias_scale
         self._torque_bias_scale = torque_bias_scale
 
@@ -172,13 +176,15 @@ class PositionActuators(_PositionActuatorsBase, StatefulActuators):
     def get_initial_state(self, physics_data: PhysicsData, rng: PRNGKeyArray) -> PyTree:
         # Sample per-joint scales and biases; keep fixed for the whole episode.
         num = physics_data.ctrl.shape[0]
-        rng_kp, rng_kd, rng_action_bias, rng_torque_bias = jax.random.split(rng, 4)
+        rng_kp, rng_kd, rng_torque_limit, rng_action_bias, rng_torque_bias = jax.random.split(rng, 5)
 
         kp_low, kp_high = self._kp_scale_range
         kd_low, kd_high = self._kd_scale_range
+        torque_limit_low, torque_limit_high = self._torque_limit_scale_range
 
         kp_scale = jax.random.uniform(rng_kp, (num,), minval=kp_low, maxval=kp_high)
         kd_scale = jax.random.uniform(rng_kd, (num,), minval=kd_low, maxval=kd_high)
+        torque_limit_scale = jax.random.uniform(rng_torque_limit, (num,), minval=torque_limit_low, maxval=torque_limit_high)
         # Sample symmetric biases: uniform in [-scale, +scale]
         action_bias = jax.random.uniform(
             rng_action_bias, (num,), minval=-self._action_bias_scale, maxval=self._action_bias_scale
@@ -190,6 +196,7 @@ class PositionActuators(_PositionActuatorsBase, StatefulActuators):
         return {
             "kp_scale": kp_scale,
             "kd_scale": kd_scale,
+            "torque_limit_scale": torque_limit_scale,
             "action_bias": action_bias,
             "torque_bias": torque_bias,
         }
@@ -219,12 +226,13 @@ class PositionActuators(_PositionActuatorsBase, StatefulActuators):
 
         kp_eff = self.kps * actuator_state["kp_scale"]
         kd_eff = self.kds * actuator_state["kd_scale"]
+        ctrl_clip_eff = self.ctrl_clip * actuator_state["torque_limit_scale"]
 
         ctrl = kp_eff * pos_delta + kd_eff * vel_delta
         ctrl = self.torque_noise.add_noise(ctrl, 1.0, tor_rng)
         ctrl = ctrl + actuator_state["torque_bias"]
 
-        return jnp.clip(ctrl, -self.ctrl_clip, self.ctrl_clip), actuator_state
+        return jnp.clip(ctrl, -ctrl_clip_eff, ctrl_clip_eff), actuator_state
 
 
 class PositionVelocityActuator(_PositionActuatorsBase, StatefulActuators):
@@ -244,6 +252,7 @@ class PositionVelocityActuator(_PositionActuatorsBase, StatefulActuators):
         pos_action_bias_scale: float = 0.0,
         vel_action_bias_scale: float = 0.0,
         torque_bias_scale: float = 0.0,
+        torque_limit_scale: float = 1.0,
     ) -> None:
         _PositionActuatorsBase.__init__(
             self,
@@ -266,9 +275,12 @@ class PositionVelocityActuator(_PositionActuatorsBase, StatefulActuators):
             raise ValueError("vel_action_bias_scale must be non-negative")
         if torque_bias_scale < 0:
             raise ValueError("torque_bias_scale must be non-negative")
+        if torque_limit_scale <= 0:
+            raise ValueError("torque_limit_scale must be positive")
 
         self._kp_scale_range = (1.0 / kp_scale, 1.0 * kp_scale)
         self._kd_scale_range = (1.0 / kd_scale, 1.0 * kd_scale)
+        self._torque_limit_scale_range = (1.0 / torque_limit_scale, 1.0 * torque_limit_scale)
         self._pos_action_bias_scale = pos_action_bias_scale
         self._vel_action_bias_scale = vel_action_bias_scale
         self._torque_bias_scale = torque_bias_scale
@@ -276,13 +288,15 @@ class PositionVelocityActuator(_PositionActuatorsBase, StatefulActuators):
     def get_initial_state(self, physics_data: PhysicsData, rng: PRNGKeyArray) -> PyTree:
         # Sample per-joint scales and biases; keep fixed for the whole episode.
         num = physics_data.ctrl.shape[0]
-        rng_kp, rng_kd, rng_pos_bias, rng_vel_bias, rng_torque_bias = jax.random.split(rng, 5)
+        rng_kp, rng_kd, rng_torque_limit, rng_pos_bias, rng_vel_bias, rng_torque_bias = jax.random.split(rng, 6)
 
         kp_low, kp_high = self._kp_scale_range
         kd_low, kd_high = self._kd_scale_range
+        torque_limit_low, torque_limit_high = self._torque_limit_scale_range
 
         kp_scale = jax.random.uniform(rng_kp, (num,), minval=kp_low, maxval=kp_high)
         kd_scale = jax.random.uniform(rng_kd, (num,), minval=kd_low, maxval=kd_high)
+        torque_limit_scale = jax.random.uniform(rng_torque_limit, (num,), minval=torque_limit_low, maxval=torque_limit_high)
         # Sample symmetric biases: uniform in [-scale, +scale]
         pos_action_bias = jax.random.uniform(
             rng_pos_bias, (num,), minval=-self._pos_action_bias_scale, maxval=self._pos_action_bias_scale
@@ -297,6 +311,7 @@ class PositionVelocityActuator(_PositionActuatorsBase, StatefulActuators):
         return {
             "kp_scale": kp_scale,
             "kd_scale": kd_scale,
+            "torque_limit_scale": torque_limit_scale,
             "pos_action_bias": pos_action_bias,
             "vel_action_bias": vel_action_bias,
             "torque_bias": torque_bias,
@@ -333,12 +348,13 @@ class PositionVelocityActuator(_PositionActuatorsBase, StatefulActuators):
 
         kp_eff = self.kps * actuator_state["kp_scale"]
         kd_eff = self.kds * actuator_state["kd_scale"]
+        ctrl_clip_eff = self.ctrl_clip * actuator_state["torque_limit_scale"]
 
         ctrl = kp_eff * pos_delta + kd_eff * vel_delta
         ctrl = self.torque_noise.add_noise(ctrl, 1.0, tor_rng)
         ctrl = ctrl + actuator_state["torque_bias"]
 
-        return jnp.clip(ctrl, -self.ctrl_clip, self.ctrl_clip), actuator_state
+        return jnp.clip(ctrl, -ctrl_clip_eff, ctrl_clip_eff), actuator_state
 
     def get_default_action(self, physics_data: PhysicsData) -> Array:
         """Get the default action (zeros) with the correct shape."""
