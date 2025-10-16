@@ -148,7 +148,7 @@ class PositionActuators(_PositionActuatorsBase, StatefulActuators):
         kd_scale: float = 1.0,
         action_bias_scale: float = 0.0,
         torque_bias_scale: float = 0.0,
-        torque_limit_scale: float = 1.0,
+        torque_limit_scale_low: float = 1.0, # optional, default is 1.0
     ) -> None:
         # Reuse base initialization to build base gains/limits and noises.
         _PositionActuatorsBase.__init__(self, physics_model, metadata, action_noise, torque_noise, action_scale)
@@ -161,12 +161,12 @@ class PositionActuators(_PositionActuatorsBase, StatefulActuators):
             raise ValueError("action_bias_scale must be non-negative")
         if torque_bias_scale < 0:
             raise ValueError("torque_bias_scale must be non-negative")
-        if torque_limit_scale <= 0:
+        if torque_limit_scale_low <= 0:
             raise ValueError("torque_limit_scale must be positive")
 
         self._kp_scale_range = (1.0 / kp_scale, 1.0 * kp_scale)
         self._kd_scale_range = (1.0 / kd_scale, 1.0 * kd_scale)
-        self._torque_limit_scale_range = (1.0 / torque_limit_scale, 1.0 * torque_limit_scale)
+        self._torque_limit_scale_range = (torque_limit_scale_low, 1.0)
         self._action_bias_scale = action_bias_scale
         self._torque_bias_scale = torque_bias_scale
 
